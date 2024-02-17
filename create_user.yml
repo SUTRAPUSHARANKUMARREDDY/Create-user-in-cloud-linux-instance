@@ -1,0 +1,49 @@
+---
+- hosts: cloud_servers
+  become: yes
+  vars_files:
+    - vars.yaml
+
+  tasks:
+    - name: List all groups in the sudoers file
+      shell: grep '^%' /etc/sudoers | awk '{print $1}' | sed 's/%//g' | head -n 1
+      changed_when: false
+      ignore_errors: true
+      register: sudo_group_list
+
+    - name: Set the first found group as the sudo group
+      set_fact:
+        sudo_group: "{{ sudo_group_list.stdout }}"
+      when: sudo_group_list.stdout != '' and sudo_group_list.rc == 0
+
+    - name: Fail if no sudo group is found
+      fail:
+        msg: "No group with sudo privileges found in the sudoers file."
+      when: sudo_group_list.stdout == '' or sudo_group_list.rc != 0
+
+    - name: Create a new user with sudo privileges in the found group
+      user:
+        name: "{{ user_name }}"
+        groups: "{{ sudo_group }}"
+        append: yes
+        create_home: yes
+        shell: /bin/bash
+
+    - name: Set password for the new user
+      user:
+        name: "{{ user_name }}"
+        password: "{{ user_password | password_hash('sha512') }}"
+
+    - name: Enable password authentication in SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication yes'
+        state: present
+      notify: restart ssh
+
+  handlers:
+    - name: restart ssh
+      service:
+        name: sshd
+        state: restarted
